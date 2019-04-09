@@ -98,8 +98,17 @@ fn main() {
                     })
                     .map(|res| warp::reply::with_header(res, "Access-Control-Allow-Origin", "*"))
                     .with(warp::log("server"))
-                    .recover(|err| -> Result<String, _> {
-                        println!("{:?}", err);
+                    .recover(|err: warp::reject::Rejection| -> Result<_, _> {
+                        let status = err.status();
+
+                        if status.is_server_error() {
+                            eprintln!("server error! {:?}", err);
+                            return Ok(
+                                http::Response::builder()
+                                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                                .body("Internal Server Error")
+                            );
+                        }
                         Err(err)
                     })
                 )
