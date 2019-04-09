@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 bb8-postgres = "0.3.0"
 bb8 = "0.3.0"
-tokio-postgres = "0.4.0-rc.2"
+tokio-postgres = { version = "0.4.0-rc.2", features = ["with-uuid-0_7"] }
 futures = "0.1.26"
 tokio = "0.1.18"
 warp = "0.1.15"
@@ -16,3 +16,4 @@ futures-cpupool = "0.1.8"
 serde = "1.0.90"
 serde_derive = "1.0.90"
 http = "0.1.17"
+uuid = { version = "0.7.4", features = ["v4"] }

@@ -56,8 +56,8 @@ fn main() {
                 let db_pool = Arc::new(db_pool);
 
                 warp::serve(
-                    warp::path("users")
-                    .and(routes::users(&cpupool, &db_pool))
+                    warp::path("users").and(routes::users(&cpupool, &db_pool))
+                    .or(warp::path("logins").and(routes::logins(&cpupool, &db_pool)))
                     .map(|res| warp::reply::with_header(res, "Access-Control-Allow-Origin", "*"))
                     .with(warp::log("server"))
                     .recover(|err: warp::reject::Rejection| -> Result<_, _> {
