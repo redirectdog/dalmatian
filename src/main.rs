@@ -1,6 +1,7 @@
-use futures::{Future, Stream};
-use serde_derive::{Deserialize};
+use futures::{Future};
 use std::sync::Arc;
+
+mod routes;
 
 #[derive(Debug)]
 enum ErrorWrapper {
@@ -28,6 +29,8 @@ impl std::fmt::Display for ErrorWrapper {
 
 impl std::error::Error for ErrorWrapper {}
 
+type DbPool = bb8::Pool<bb8_postgres::PostgresConnectionManager<tokio_postgres::NoTls>>;
+
 fn tack_on<T, E, A>(src: Result<T, E>, add: A) -> Result<(T, A), (E, A)> {
     match src {
         Ok(value) => Ok((value, add)),
@@ -52,50 +55,9 @@ fn main() {
 
                 let db_pool = Arc::new(db_pool);
 
-                #[derive(Deserialize)]
-                struct SignupReqBody {
-                    email: String,
-                    password: String,
-                }
-
                 warp::serve(
                     warp::path("users")
-                    .and(warp::post2())
-                    .and(warp::body::json())
-                    .and_then({
-                        let cpupool = cpupool.clone();
-                        let db_pool = db_pool.clone();
-                        move |body: SignupReqBody| {
-                            let db_pool = db_pool.clone();
-
-                            let password = body.password;
-                            let email = body.email;
-
-                            cpupool.spawn_fn(move || {
-                                bcrypt::hash(password, bcrypt::DEFAULT_COST)
-                                    .or_else(|err| Err(warp::reject::custom(err)))
-                            })
-                            .and_then(move |passhash| {
-                                db_pool.run(move |mut conn| {
-                                    conn.prepare("INSERT INTO users (email, passhash) VALUES ($1, $2) RETURNING id")
-                                        .then(|res| tack_on(res, conn))
-                                        .and_then(move |(stmt, mut conn)| {
-                                            conn.query(&stmt, &[&email, &passhash])
-                                                .into_future()
-                                                .map(|(res, _)| res)
-                                                .map_err(|(err, _)| err)
-                                                .and_then(|row| {
-                                                    let id: i32 = row.expect("RETURNING clause failed?").get(0);
-                                                    Ok(id.to_string())
-                                                })
-                                                .then(|res| tack_on(res, conn))
-                                        })
-                                })
-                                .map_err(ErrorWrapper::from)
-                                    .map_err(warp::reject::custom)
-                            })
-                        }
-                    })
+                    .and(routes::users(&cpupool, &db_pool))
                     .map(|res| warp::reply::with_header(res, "Access-Control-Allow-Origin", "*"))
                     .with(warp::log("server"))
                     .recover(|err: warp::reject::Rejection| -> Result<_, _> {
