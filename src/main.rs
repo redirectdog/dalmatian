@@ -1,4 +1,4 @@
-use futures::{Future};
+use futures::{Future, IntoFuture, Stream};
 use std::sync::Arc;
 
 mod routes;
@@ -36,6 +36,90 @@ fn tack_on<T, E, A>(src: Result<T, E>, add: A) -> Result<(T, A), (E, A)> {
         Ok(value) => Ok((value, add)),
         Err(err) => Err((err, add)),
     }
+}
+
+pub struct UserID(i32);
+
+impl std::str::FromStr for UserID {
+    type Err = std::num::ParseIntError;
+    fn from_str(src: &str) -> Result<UserID, Self::Err> {
+        src.parse().map(UserID)
+    }
+}
+
+impl UserID {
+    pub fn to_raw(&self) -> i32 {
+        self.0
+    }
+}
+
+#[derive(Debug)]
+pub enum UserError {
+    InvalidAuthorizationHeader,
+    InvalidToken,
+    LoginRequired,
+    OnlyForMe,
+}
+
+impl std::fmt::Display for UserError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            UserError::InvalidAuthorizationHeader => write!(f, "Invalid Authorization header value"),
+            UserError::InvalidToken => write!(f, "Unrecognized authentication token"),
+            UserError::LoginRequired => write!(f, "You must log in to do that"),
+            UserError::OnlyForMe => write!(f, "This endpoint is only available for ~me"),
+        }
+    }
+}
+
+impl std::error::Error for UserError {}
+
+pub fn rd_login(db_pool: Arc<DbPool>) -> impl warp::Filter<Extract=(Option<UserID>,), Error=warp::Rejection> + Clone {
+    use headers::Header;
+    use warp::Filter;
+
+    warp::header::optional("Authorization") // TODO find some way to avoid this string
+        .and_then(|value: Option<String>| value.map(|value| {
+            http::header::HeaderValue::from_str(&value)
+                .map_err(|_| UserError::InvalidAuthorizationHeader)
+                .and_then(|value| {
+                    headers::Authorization::<headers::authorization::Bearer>::decode(&mut [value].iter())
+                        .map_err(|_| UserError::InvalidAuthorizationHeader)
+                })
+            .map(|value| {
+                value.0.token().to_owned()
+            })
+            .map_err(warp::reject::custom)
+                .into_future()
+        }))
+    .and_then(move |token: Option<String>| {
+        match token.map(|src| src.parse::<uuid::Uuid>()) {
+            Some(Ok(token)) => {
+                futures::future::Either::A(db_pool.run(move |mut conn| {
+                    conn.prepare("SELECT user_id FROM logins WHERE token=$1")
+                        .then(|res| tack_on(res, conn))
+                        .and_then(move |(stmt, mut conn)| {
+                            conn.query(&stmt, &[&token])
+                                .into_future()
+                                .map(|(res, _)| res)
+                                .map_err(|(err, _)| err)
+                                .then(|res| tack_on(res, conn))
+                        })
+                })
+                .map_err(ErrorWrapper::from)
+                    .map_err(warp::reject::custom)
+                    .and_then(|row| {
+                        row.ok_or_else(|| warp::reject::custom(UserError::InvalidToken))
+                    })
+                .and_then(|row| {
+                    let user_id: i32 = row.get(0);
+                    let user_id = UserID(user_id);
+                    Ok(Some(user_id))
+                }))
+            },
+            None | Some(Err(_)) => futures::future::Either::B(futures::future::ok(None)),
+        }
+    })
 }
 
 fn main() {
