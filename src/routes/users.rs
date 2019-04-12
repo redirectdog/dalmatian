@@ -34,7 +34,7 @@ impl std::str::FromStr for UserIDOrMe {
     }
 }
 
-pub fn users(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &Arc<DbPool>) -> impl Filter<Error=warp::reject::Rejection, Extract=(impl warp::reply::Reply,)> + Clone {
+pub fn users(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &Arc<DbPool>) -> warp::filters::BoxedFilter<(impl warp::reply::Reply,)> {
     warp::post2()
         .and(warp::body::json())
         .and_then({
@@ -72,6 +72,7 @@ pub fn users(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &Arc<DbPool>) -> 
             }
         })
     .or(user_path(db_pool))
+        .boxed()
 }
 
 pub fn user_path(db_pool: &Arc<DbPool>) -> warp::filters::BoxedFilter<(impl warp::reply::Reply,)> {

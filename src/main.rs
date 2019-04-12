@@ -74,7 +74,7 @@ impl std::fmt::Display for UserError {
 
 impl std::error::Error for UserError {}
 
-pub fn rd_login(db_pool: Arc<DbPool>) -> impl warp::Filter<Extract=(Option<UserID>,), Error=warp::Rejection> + Clone {
+pub fn rd_login(db_pool: Arc<DbPool>) -> warp::filters::BoxedFilter<(Option<UserID>,)> {
     use headers::Header;
     use warp::Filter;
 
@@ -120,6 +120,7 @@ pub fn rd_login(db_pool: Arc<DbPool>) -> impl warp::Filter<Extract=(Option<UserI
             None | Some(Err(_)) => futures::future::Either::B(futures::future::ok(None)),
         }
     })
+    .boxed()
 }
 
 fn main() {

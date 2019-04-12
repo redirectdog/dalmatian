@@ -28,7 +28,7 @@ struct LoginReqBody {
     password: String,
 }
 
-pub fn logins(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &Arc<DbPool>) -> impl Filter<Error=warp::reject::Rejection, Extract=(impl warp::reply::Reply,)> + Clone {
+pub fn logins(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &Arc<DbPool>) -> warp::filters::BoxedFilter<(impl warp::reply::Reply,)> {
     warp::post2()
         .and(warp::body::json())
         .and_then({
@@ -110,4 +110,5 @@ pub fn logins(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &Arc<DbPool>) ->
             Err(err)
         }
     })
+    .boxed()
 }
