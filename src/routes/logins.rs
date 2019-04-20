@@ -4,25 +4,6 @@ use std::sync::Arc;
 
 use crate::{tack_on, DbPool, ErrorWrapper};
 
-#[derive(Debug)]
-enum LoginUserError {
-    IncorrectPassword,
-    NoSuchUserWithEmail,
-}
-
-impl std::fmt::Display for LoginUserError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            LoginUserError::IncorrectPassword => write!(f, "Incorrect password"),
-            LoginUserError::NoSuchUserWithEmail => {
-                write!(f, "No such user with that email address")
-            }
-        }
-    }
-}
-
-impl std::error::Error for LoginUserError {}
-
 #[derive(Debug, Deserialize)]
 struct LoginReqBody {
     email: String,

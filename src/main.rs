@@ -1,4 +1,4 @@
-use futures::{Future, IntoFuture, Stream};
+use futures::{Future, Stream};
 use std::sync::Arc;
 
 mod routes;
@@ -59,29 +59,6 @@ impl UserID {
         self.0
     }
 }
-
-#[derive(Debug)]
-pub enum UserError {
-    InvalidAuthorizationHeader,
-    InvalidToken,
-    LoginRequired,
-    OnlyForMe,
-}
-
-impl std::fmt::Display for UserError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            UserError::InvalidAuthorizationHeader => {
-                write!(f, "Invalid Authorization header value")
-            }
-            UserError::InvalidToken => write!(f, "Unrecognized authentication token"),
-            UserError::LoginRequired => write!(f, "You must log in to do that"),
-            UserError::OnlyForMe => write!(f, "This endpoint is only available for ~me"),
-        }
-    }
-}
-
-impl std::error::Error for UserError {}
 
 pub fn rd_login(
     db_pool: &DbPool,

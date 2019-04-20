@@ -2,7 +2,7 @@ use futures::{Future, IntoFuture, Stream};
 use serde_derive::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{rd_login, tack_on, DbPool, ErrorWrapper, UserError, UserID};
+use crate::{rd_login, tack_on, DbPool, ErrorWrapper, UserID};
 
 #[derive(Deserialize)]
 struct SignupReqBody {
@@ -88,7 +88,7 @@ pub fn users(
     } else if let Some((segment, path)) = crate::consume_path_segment(path) {
         match segment.parse::<UserIDOrMe>() {
             Ok(id_or_me) => user_path(db_pool, req, id_or_me, path),
-            Err(err) => Box::new(futures::future::err(crate::Error::Custom(
+            Err(_err) => Box::new(futures::future::err(crate::Error::Custom(
                 hyper::Response::builder()
                     .status(hyper::StatusCode::BAD_REQUEST)
                     .body("Invalid user ID segment. Must be an integer or '~me'".into()),
