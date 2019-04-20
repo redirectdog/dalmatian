@@ -40,8 +40,8 @@ pub fn users(
     path: &str,
 ) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     if path.is_empty() {
-        match req.method() {
-            &hyper::Method::POST => {
+        match *req.method() {
+            hyper::Method::POST => {
                 let cpupool = cpupool.clone();
                 let db_pool = db_pool.clone();
 
@@ -100,13 +100,14 @@ pub fn users(
 }
 
 fn ensure_me(is_me: bool) -> Result<(), crate::Error> {
-    match is_me {
-        true => Ok(()),
-        false => Err(crate::Error::Custom(
+    if is_me {
+        Ok(())
+    } else {
+        Err(crate::Error::Custom(
             hyper::Response::builder()
                 .status(hyper::StatusCode::UNAUTHORIZED)
                 .body("This endpoint is only available for ~me".into()),
-        )),
+        ))
     }
 }
 
@@ -139,8 +140,8 @@ fn user_path(
              .and_then(move |(id, is_me)| -> Box<Future<Item=hyper::Response<hyper::Body>, Error=crate::Error> + Send> {
                  if let Some(path) = crate::consume_path(&path, "redirects/") {
                      if path.is_empty() {
-                         return match req.method() {
-                             &hyper::Method::GET => {
+                         return match *req.method() {
+                             hyper::Method::GET => {
                                  Box::new(ensure_me(is_me)
                                           .into_future()
                                           .and_then(move |_| {

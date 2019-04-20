@@ -17,8 +17,8 @@ pub fn logins(
     path: &str,
 ) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     if path.is_empty() {
-        match req.method() {
-            &hyper::Method::POST => {
+        match *req.method() {
+            hyper::Method::POST => {
                 let db_pool = db_pool.clone();
                 let cpupool = cpupool.clone();
 

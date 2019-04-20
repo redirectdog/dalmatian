@@ -129,7 +129,7 @@ fn consume_path<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     }
 }
 
-fn consume_path_segment<'a>(path: &'a str) -> Option<(&'a str, &'a str)> {
+fn consume_path_segment(path: &str) -> Option<(&str, &str)> {
     path.find('/').map(|idx| (&path[..idx], &path[(idx + 1)..]))
 }
 
