@@ -1,5 +1,5 @@
 mod logins;
 mod users;
 
-pub use logins::logins;
-pub use users::users;
+pub use self::logins::logins;
+pub use self::users::users;
