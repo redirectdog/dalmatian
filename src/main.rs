@@ -46,6 +46,7 @@ fn tack_on<T, E, A>(src: Result<T, E>, add: A) -> Result<(T, A), (E, A)> {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct UserID(i32);
 
 impl std::str::FromStr for UserID {
@@ -82,56 +83,54 @@ impl std::fmt::Display for UserError {
 
 impl std::error::Error for UserError {}
 
-/*
-pub fn rd_login(db_pool: Arc<DbPool>) -> warp::filters::BoxedFilter<(Option<UserID>,)> {
+pub fn rd_login(db_pool: &DbPool, req: &hyper::Request<hyper::Body>) -> impl Future<Item=Option<UserID>, Error=Error> + Send {
     use headers::Header;
-    use warp::Filter;
 
-    warp::header::optional("Authorization") // TODO find some way to avoid this string
-        .and_then(|value: Option<String>| value.map(|value| {
-            http::header::HeaderValue::from_str(&value)
-                .map_err(|_| UserError::InvalidAuthorizationHeader)
-                .and_then(|value| {
-                    headers::Authorization::<headers::authorization::Bearer>::decode(&mut [value].iter())
-                        .map_err(|_| UserError::InvalidAuthorizationHeader)
-                })
+    let value = req.headers().get(hyper::header::AUTHORIZATION);
+    let value = value.map(|value| {
+        headers::Authorization::<headers::authorization::Bearer>::decode(&mut vec![value].into_iter())
+            .map_err(|_| Error::Custom(hyper::Response::builder()
+                                       .status(hyper::StatusCode::BAD_REQUEST)
+                                       .body("Invalid Authorization header value".into())))
             .map(|value| {
                 value.0.token().to_owned()
             })
-            .map_err(warp::reject::custom)
-                .into_future()
-        }))
-    .and_then(move |token: Option<String>| {
-        match token.map(|src| src.parse::<uuid::Uuid>()) {
-            Some(Ok(token)) => {
-                futures::future::Either::A(db_pool.run(move |mut conn| {
-                    conn.prepare("SELECT user_id FROM logins WHERE token=$1")
-                        .then(|res| tack_on(res, conn))
-                        .and_then(move |(stmt, mut conn)| {
-                            conn.query(&stmt, &[&token])
-                                .into_future()
-                                .map(|(res, _)| res)
-                                .map_err(|(err, _)| err)
-                                .then(|res| tack_on(res, conn))
-                        })
-                })
-                .map_err(ErrorWrapper::from)
-                    .map_err(warp::reject::custom)
-                    .and_then(|row| {
-                        row.ok_or_else(|| warp::reject::custom(UserError::InvalidToken))
+    });
+    let value = value.map(|src| {
+        src.and_then(|src| {
+            src.parse::<uuid::Uuid>()
+                .map_err(|err| Error::Internal(Box::new(err)))
+        })
+    });
+    match value {
+        Some(Ok(token)) => {
+            futures::future::Either::A(db_pool.run(move |mut conn| {
+                conn.prepare("SELECT user_id FROM logins WHERE token=$1")
+                    .then(|res| tack_on(res, conn))
+                    .and_then(move |(stmt, mut conn)| {
+                        conn.query(&stmt, &[&token])
+                            .into_future()
+                            .map(|(res, _)| res)
+                            .map_err(|(err, _)| err)
+                            .then(|res| tack_on(res, conn))
                     })
-                .and_then(|row| {
-                    let user_id: i32 = row.get(0);
-                    let user_id = UserID(user_id);
-                    Ok(Some(user_id))
-                }))
-            },
-            None | Some(Err(_)) => futures::future::Either::B(futures::future::ok(None)),
-        }
-    })
-    .boxed()
+            })
+                                       .map_err(ErrorWrapper::from)
+                                       .map_err(|err| Error::Internal(Box::new(err)))
+                                       .and_then(|row| {
+                                           row.ok_or_else(|| Error::Custom(hyper::Response::builder()
+                                                                           .status(hyper::StatusCode::BAD_REQUEST)
+                                                                           .body("Unrecognized authentication token".into())))
+                                       })
+                                       .and_then(|row| {
+                                           let user_id: i32 = row.get(0);
+                                           let user_id = UserID(user_id);
+                                           Ok(Some(user_id))
+                                       }))
+        },
+        None | Some(Err(_)) => futures::future::Either::B(futures::future::ok(None)),
+    }
 }
-*/
 
 fn consume_path<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     if path.starts_with(prefix) {
@@ -139,6 +138,10 @@ fn consume_path<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     } else {
         None
     }
+}
+
+fn consume_path_segment<'a>(path: &'a str) -> Option<(&'a str, &'a str)> {
+    path.find('/').map(|idx| (&path[..idx], &path[(idx+1)..]))
 }
 
 fn handle_request(req: hyper::Request<hyper::Body>, cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &DbPool) -> impl Future<Item=hyper::Response<hyper::Body>, Error=hyper::Error> + Send {
@@ -153,6 +156,8 @@ fn handle_request(req: hyper::Request<hyper::Body>, cpupool: &Arc<futures_cpupoo
 
     let result = if let Some(path) = consume_path(path, "logins/") {
         routes::logins(cpupool, db_pool, req, path)
+    } else if let Some(path) = consume_path(path, "users/") {
+        routes::users(cpupool, db_pool, req, path)
     } else {
         Box::new(futures::future::err(Error::NotFound))
     };
@@ -214,33 +219,6 @@ fn main() {
                         hyper::service::service_fn(move |req| handle_request(req, &cpupool, &db_pool))
                     })
                 .map_err(|err| panic!("Server execution failed: {:?}", err))
-
-                /*
-                use warp::Filter;
-
-                let db_pool = Arc::new(db_pool);
-
-                warp::serve(
-                    warp::path("users").and(routes::users(&cpupool, &db_pool))
-                    .or(warp::path("logins").and(routes::logins(&cpupool, &db_pool)))
-                    .map(|res| warp::reply::with_header(res, "Access-Control-Allow-Origin", "*"))
-                    .with(warp::log("server"))
-                    .recover(|err: warp::reject::Rejection| -> Result<_, _> {
-                        let status = err.status();
-
-                        if status.is_server_error() {
-                            eprintln!("server error! {:?}", err);
-                            return Ok(
-                                http::Response::builder()
-                                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                                .body("Internal Server Error")
-                            );
-                        }
-                        Err(err)
-                    })
-                )
-                    .bind((std::net::Ipv6Addr::UNSPECIFIED, port))
-                    */
             })
     }))
 }

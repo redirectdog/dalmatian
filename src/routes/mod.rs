@@ -1,5 +1,5 @@
 mod logins;
-// mod users;
+mod users;
 
 pub use logins::logins;
-// pub use users::users;
+pub use users::users;
