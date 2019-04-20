@@ -10,6 +10,12 @@ struct SignupReqBody {
     password: String,
 }
 
+#[derive(Deserialize)]
+struct RedirectCreateReqBody {
+    host: String,
+    destination: String,
+}
+
 enum UserIDOrMe {
     ID(UserID),
     Me,
@@ -176,6 +182,41 @@ fn user_path(
                                                  .map_err(|err| crate::Error::Internal(Box::new(err)))
                                          })
                                  }))
+                             },
+                             hyper::Method::POST => {
+                                 Box::new(ensure_me(is_me)
+                                          .into_future()
+                                          .and_then(move |_| {
+                                              req.into_body()
+                                                  .concat2()
+                                                  .map_err(|err| crate::Error::Internal(Box::new(err)))
+                                                  .and_then(|body| {
+                                                      serde_json::from_slice(&body)
+                                                          .map_err(|err| crate::Error::Internal(Box::new(err)))
+                                                  })
+                                              .and_then(move |body: RedirectCreateReqBody| {
+                                                  db_pool.run(move |mut conn| {
+                                                      conn.prepare("INSERT INTO redirects (host, destination, owner) VALUES ($1, $2, $3) RETURNING id")
+                                                          .then(|res| tack_on(res, conn))
+                                                          .and_then(move |(stmt, mut conn)| {
+                                                              conn.query(&stmt, &[&body.host, &body.destination, &id.0])
+                                                                  .into_future()
+                                                                  .map(|(res, _)| res)
+                                                                  .map_err(|(err, _)| err)
+                                                                  .and_then(|row| {
+                                                                      let id: i32 = row.expect("RETURNING clause failed?").get(0);
+                                                                      Ok(hyper::Response::builder()
+                                                                         .body(id.to_string().into())
+                                                                         .map_err(|err| crate::Error::Internal(Box::new(err))))
+                                                                  })
+                                                              .then(|res| tack_on(res, conn))
+                                                          })
+                                                  })
+                                                  .map_err(ErrorWrapper::from)
+                                                      .map_err(|err| crate::Error::Internal(Box::new(err)))
+                                                      .and_then(|x| x)
+                                              })
+                                          }))
                              },
                              _ => Box::new(futures::future::err(crate::Error::InvalidMethod))
                          }
