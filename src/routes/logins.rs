@@ -2,7 +2,7 @@ use futures::{Future, Stream};
 use serde_derive::Deserialize;
 use std::sync::Arc;
 
-use crate::{DbPool, ErrorWrapper, tack_on};
+use crate::{tack_on, DbPool, ErrorWrapper};
 
 #[derive(Debug)]
 enum LoginUserError {
@@ -14,7 +14,9 @@ impl std::fmt::Display for LoginUserError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             LoginUserError::IncorrectPassword => write!(f, "Incorrect password"),
-            LoginUserError::NoSuchUserWithEmail => write!(f, "No such user with that email address"),
+            LoginUserError::NoSuchUserWithEmail => {
+                write!(f, "No such user with that email address")
+            }
         }
     }
 }
@@ -27,7 +29,12 @@ struct LoginReqBody {
     password: String,
 }
 
-pub fn logins(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &DbPool, req: hyper::Request<hyper::Body>, path: &str) -> Box<Future<Item=hyper::Response<hyper::Body>, Error=crate::Error> + Send> {
+pub fn logins(
+    cpupool: &Arc<futures_cpupool::CpuPool>,
+    db_pool: &DbPool,
+    req: hyper::Request<hyper::Body>,
+    path: &str,
+) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     if path.is_empty() {
         match req.method() {
             &hyper::Method::POST => {
@@ -107,11 +114,10 @@ pub fn logins(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &DbPool, req: hy
                                      .map_err(|err| crate::Error::Internal(Box::new(err)))
                              })
                          }))
-            },
+            }
             _ => Box::new(futures::future::err(crate::Error::InvalidMethod)),
         }
-    }
-    else {
+    } else {
         Box::new(futures::future::err(crate::Error::NotFound))
     }
 }

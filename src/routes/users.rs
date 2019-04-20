@@ -2,7 +2,7 @@ use futures::{Future, IntoFuture, Stream};
 use serde_derive::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{DbPool, ErrorWrapper, rd_login, tack_on, UserError, UserID};
+use crate::{rd_login, tack_on, DbPool, ErrorWrapper, UserError, UserID};
 
 #[derive(Deserialize)]
 struct SignupReqBody {
@@ -33,7 +33,12 @@ impl std::str::FromStr for UserIDOrMe {
     }
 }
 
-pub fn users(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &DbPool, req: hyper::Request<hyper::Body>, path: &str) -> Box<Future<Item=hyper::Response<hyper::Body>, Error=crate::Error> + Send> {
+pub fn users(
+    cpupool: &Arc<futures_cpupool::CpuPool>,
+    db_pool: &DbPool,
+    req: hyper::Request<hyper::Body>,
+    path: &str,
+) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     if path.is_empty() {
         match req.method() {
             &hyper::Method::POST => {
@@ -77,15 +82,17 @@ pub fn users(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &DbPool, req: hyp
                                          .and_then(|x| x)
                                  })
                          }))
-            },
-            _ => Box::new(futures::future::err(crate::Error::InvalidMethod))
+            }
+            _ => Box::new(futures::future::err(crate::Error::InvalidMethod)),
         }
     } else if let Some((segment, path)) = crate::consume_path_segment(path) {
         match segment.parse::<UserIDOrMe>() {
             Ok(id_or_me) => user_path(db_pool, req, id_or_me, path),
-            Err(err) => Box::new(futures::future::err(crate::Error::Custom(hyper::Response::builder()
-                                                                           .status(hyper::StatusCode::BAD_REQUEST)
-                                                                           .body("Invalid user ID segment. Must be an integer or '~me'".into()))))
+            Err(err) => Box::new(futures::future::err(crate::Error::Custom(
+                hyper::Response::builder()
+                    .status(hyper::StatusCode::BAD_REQUEST)
+                    .body("Invalid user ID segment. Must be an integer or '~me'".into()),
+            ))),
         }
     } else {
         Box::new(futures::future::err(crate::Error::NotFound))
@@ -95,13 +102,20 @@ pub fn users(cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &DbPool, req: hyp
 fn ensure_me(is_me: bool) -> Result<(), crate::Error> {
     match is_me {
         true => Ok(()),
-        false => Err(crate::Error::Custom(hyper::Response::builder()
-                                      .status(hyper::StatusCode::UNAUTHORIZED)
-                                      .body("This endpoint is only available for ~me".into())))
+        false => Err(crate::Error::Custom(
+            hyper::Response::builder()
+                .status(hyper::StatusCode::UNAUTHORIZED)
+                .body("This endpoint is only available for ~me".into()),
+        )),
     }
 }
 
-fn user_path(db_pool: &DbPool, req: hyper::Request<hyper::Body>, id_or_me: UserIDOrMe, path: &str) -> Box<Future<Item=hyper::Response<hyper::Body>, Error=crate::Error> + Send> {
+fn user_path(
+    db_pool: &DbPool,
+    req: hyper::Request<hyper::Body>,
+    id_or_me: UserIDOrMe,
+    path: &str,
+) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     let db_pool = db_pool.clone();
     let path = path.to_owned();
     Box::new(rd_login(&db_pool, &req)
