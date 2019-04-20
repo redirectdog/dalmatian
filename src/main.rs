@@ -3,6 +3,14 @@ use std::sync::Arc;
 
 mod routes;
 
+pub enum Error {
+    NotFound,
+    InvalidMethod,
+    Custom(Result<hyper::Response<hyper::Body>, http::Error>),
+    Unimplemented,
+    Internal(Box<dyn std::error::Error + Send>),
+}
+
 #[derive(Debug)]
 enum ErrorWrapper {
     Pool(bb8::RunError<tokio_postgres::Error>),
@@ -74,6 +82,7 @@ impl std::fmt::Display for UserError {
 
 impl std::error::Error for UserError {}
 
+/*
 pub fn rd_login(db_pool: Arc<DbPool>) -> warp::filters::BoxedFilter<(Option<UserID>,)> {
     use headers::Header;
     use warp::Filter;
@@ -122,6 +131,68 @@ pub fn rd_login(db_pool: Arc<DbPool>) -> warp::filters::BoxedFilter<(Option<User
     })
     .boxed()
 }
+*/
+
+fn consume_path<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    if path.starts_with(prefix) {
+        Some(&path[prefix.len()..])
+    } else {
+        None
+    }
+}
+
+fn handle_request(req: hyper::Request<hyper::Body>, cpupool: &Arc<futures_cpupool::CpuPool>, db_pool: &DbPool) -> impl Future<Item=hyper::Response<hyper::Body>, Error=hyper::Error> + Send {
+    let path_with_slash = format!("{}/", req.uri().path());
+    let mut path = &path_with_slash[..];
+    if path.ends_with("//") {
+        path = &path[..(path.len()-1)];
+    }
+    if path.starts_with('/') {
+        path = &path[1..];
+    }
+
+    let result = if let Some(path) = consume_path(path, "logins/") {
+        routes::logins(cpupool, db_pool, req, path)
+    } else {
+        Box::new(futures::future::err(Error::NotFound))
+    };
+
+    result.or_else(|mut err| {
+        if let Error::Custom(res) = err {
+            match res {
+                Ok(res) => {
+                    return Ok(res);
+                },
+                Err(err2) => {
+                    err = Error::Internal(Box::new(err2))
+                }
+            }
+        }
+
+        // err cannot be Error::Custom at this point
+
+        if let Error::Internal(ref err) = err {
+            eprintln!("server error: {:?}", err);
+        } else if let Error::Unimplemented = err {
+            eprintln!("server error: unimplemented");
+        }
+
+        Ok(hyper::Response::builder()
+            .status(match err {
+                Error::NotFound => hyper::StatusCode::NOT_FOUND,
+                Error::InvalidMethod => hyper::StatusCode::METHOD_NOT_ALLOWED,
+                Error::Internal(_) | Error::Unimplemented => hyper::StatusCode::INTERNAL_SERVER_ERROR,
+                Error::Custom(_) => unreachable!(),
+            })
+            .body(match err {
+                Error::NotFound => "Not Found",
+                Error::InvalidMethod => "Method Not Allowed",
+                Error::Internal(_) | Error::Unimplemented => "Internal Server Error",
+                Error::Custom(_) => unreachable!(),
+            }.into())
+            .unwrap())
+    })
+}
 
 fn main() {
     let port: u16 = std::env::var("PORT").unwrap_or_else(|_| "5000".to_owned()).parse()
@@ -136,6 +207,15 @@ fn main() {
             .build(bb8_postgres::PostgresConnectionManager::new(database_url, tokio_postgres::NoTls))
             .map_err(|err| panic!("Failed to connect to database: {:?}", err))
             .and_then(move |db_pool| {
+                hyper::Server::bind(&std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)))
+                    .serve(move || {
+                        let db_pool = db_pool.clone();
+                        let cpupool = cpupool.clone();
+                        hyper::service::service_fn(move |req| handle_request(req, &cpupool, &db_pool))
+                    })
+                .map_err(|err| panic!("Server execution failed: {:?}", err))
+
+                /*
                 use warp::Filter;
 
                 let db_pool = Arc::new(db_pool);
@@ -160,6 +240,7 @@ fn main() {
                     })
                 )
                     .bind((std::net::Ipv6Addr::UNSPECIFIED, port))
+                    */
             })
     }))
 }
