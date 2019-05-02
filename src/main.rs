@@ -54,6 +54,12 @@ impl std::str::FromStr for UserID {
     }
 }
 
+impl serde::Serialize for UserID {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        self.to_raw().serialize(ser)
+    }
+}
+
 impl UserID {
     pub fn to_raw(&self) -> i32 {
         self.0
