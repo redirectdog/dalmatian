@@ -26,6 +26,8 @@ struct RedirectInfo {
     id: i32,
     host: String,
     destination: String,
+    visits_total: i32,
+    visits_month: i32,
 }
 
 impl std::str::FromStr for UserIDOrMe {
@@ -168,7 +170,7 @@ fn user_path(
                                           .into_future()
                                           .and_then(move |_| {
                                               db_pool.run(move |mut conn| {
-                                                  conn.prepare("SELECT id, host, destination FROM redirects WHERE owner=$1")
+                                                  conn.prepare("SELECT id, host, destination, cache_visit_count_total, cache_visit_count_month FROM redirects WHERE owner=$1")
                                                       .then(|res| tack_on(res, conn))
                                                       .and_then(move |(stmt, mut conn)| {
                                                           conn.query(&stmt, &[&id.to_raw()])
@@ -184,6 +186,8 @@ fn user_path(
                                                               id: row.get(0),
                                                               host: row.get(1),
                                                               destination: row.get(2),
+                                                              visits_total: row.get(3),
+                                                              visits_month: row.get(4),
                                                           }
                                                       }).collect::<Vec<_>>()
                                                   })
