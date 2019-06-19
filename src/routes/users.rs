@@ -26,8 +26,8 @@ struct RedirectInfo {
     id: i32,
     host: String,
     destination: String,
-    visits_total: i32,
-    visits_month: i32,
+    visits_total: Option<i32>,
+    visits_month: Option<i32>,
 }
 
 impl std::str::FromStr for UserIDOrMe {
