@@ -30,8 +30,6 @@ pub fn logins(
                                  .map_err(|err| crate::Error::Internal(Box::new(err)))
                          })
                          .and_then(move |body: LoginReqBody| {
-                             println!("{:?}", body);
-
                              let LoginReqBody { email, password } = body;
 
                              db_pool.run(move |mut conn| {
