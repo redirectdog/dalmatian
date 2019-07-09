@@ -1,5 +1,6 @@
 use futures::{Future, Stream};
-use std::sync::Arc;
+use serde_derive::Serialize;
+use std::sync::{Arc, RwLock};
 
 mod routes;
 
@@ -36,6 +37,25 @@ impl std::fmt::Display for ErrorWrapper {
 impl std::error::Error for ErrorWrapper {}
 
 type DbPool = bb8::Pool<bb8_postgres::PostgresConnectionManager<tokio_postgres::NoTls>>;
+
+#[derive(Serialize)]
+pub struct TierInfo {
+    id: i32,
+    name: String,
+    stripe_plan: Option<String>,
+    visit_limit: i32,
+}
+
+#[derive(Clone, Default)]
+pub struct ServerState {
+    pub tiers: Arc<RwLock<Vec<TierInfo>>>,
+}
+
+impl ServerState {
+    pub fn new() -> ServerState {
+        Default::default()
+    }
+}
 
 fn tack_on<T, E, A>(src: Result<T, E>, add: A) -> Result<(T, A), (E, A)> {
     match src {
@@ -143,6 +163,7 @@ fn handle_request(
     req: hyper::Request<hyper::Body>,
     cpupool: &Arc<futures_cpupool::CpuPool>,
     db_pool: &DbPool,
+    server_state: &ServerState,
 ) -> impl Future<Item = hyper::Response<hyper::Body>, Error = hyper::Error> + Send {
     let path_with_slash = format!("{}/", req.uri().path());
     let mut path = &path_with_slash[..];
@@ -157,6 +178,8 @@ fn handle_request(
         routes::logins(cpupool, db_pool, req, path)
     } else if let Some(path) = consume_path(path, "users/") {
         routes::users(cpupool, db_pool, req, path)
+    } else if let Some(path) = consume_path(path, "subscription_tiers/") {
+        routes::subscription_tiers(server_state, req, path)
     } else {
         Box::new(futures::future::err(Error::NotFound))
     };
@@ -211,6 +234,7 @@ fn main() {
 
     tokio::run(futures::lazy(move || {
         let cpupool = Arc::new(futures_cpupool::CpuPool::new_num_cpus());
+        let server_state = ServerState::new();
 
         bb8::Pool::builder()
             .build(bb8_postgres::PostgresConnectionManager::new(
@@ -219,6 +243,8 @@ fn main() {
             ))
             .map_err(|err| panic!("Failed to connect to database: {:?}", err))
             .and_then(move |db_pool| {
+                tokio::spawn(retrieve_plans(&db_pool, server_state.clone()));
+
                 hyper::Server::bind(&std::net::SocketAddr::from((
                     std::net::Ipv6Addr::UNSPECIFIED,
                     port,
@@ -226,9 +252,40 @@ fn main() {
                 .serve(move || {
                     let db_pool = db_pool.clone();
                     let cpupool = cpupool.clone();
-                    hyper::service::service_fn(move |req| handle_request(req, &cpupool, &db_pool))
+                    let server_state = server_state.clone();
+                    hyper::service::service_fn(move |req| {
+                        handle_request(req, &cpupool, &db_pool, &server_state)
+                    })
                 })
                 .map_err(|err| panic!("Server execution failed: {:?}", err))
             })
     }))
+}
+
+fn retrieve_plans(
+    db_pool: &DbPool,
+    server_state: ServerState,
+) -> impl Future<Item = (), Error = ()> + Send {
+    db_pool
+        .run(move |mut conn| {
+            conn.prepare("SELECT id, name, stripe_plan, visit_limit FROM subscription_tiers")
+                .then(|res| tack_on(res, conn))
+                .and_then(move |(stmt, mut conn)| {
+                    conn.query(&stmt, &[])
+                        .map(|row| TierInfo {
+                            id: row.get(0),
+                            name: row.get(1),
+                            stripe_plan: row.get(2),
+                            visit_limit: row.get(3),
+                        })
+                        .collect()
+                        .then(|res| tack_on(res, conn))
+                })
+        })
+        .map(move |tiers| {
+            *server_state.tiers.write().unwrap() = tiers;
+        })
+        .map_err(|err| {
+            eprintln!("failed in retrieve_plans: {:?}", err);
+        })
 }
