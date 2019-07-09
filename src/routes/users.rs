@@ -2,7 +2,7 @@ use futures::{Future, IntoFuture, Stream};
 use serde_derive::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{rd_login, tack_on, DbPool, ErrorWrapper, UserID};
+use crate::{rd_login, tack_on, DbPool, ErrorWrapper, ServerState, UserID};
 
 #[derive(Deserialize)]
 struct SignupReqBody {
@@ -44,6 +44,7 @@ impl std::str::FromStr for UserIDOrMe {
 pub fn users(
     cpupool: &Arc<futures_cpupool::CpuPool>,
     db_pool: &DbPool,
+    server_state: &ServerState,
     req: hyper::Request<hyper::Body>,
     path: &str,
 ) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
@@ -95,7 +96,7 @@ pub fn users(
         }
     } else if let Some((segment, path)) = crate::consume_path_segment(path) {
         match segment.parse::<UserIDOrMe>() {
-            Ok(id_or_me) => user_path(db_pool, req, id_or_me, path),
+            Ok(id_or_me) => user_path(db_pool, server_state, req, id_or_me, path),
             Err(_err) => Box::new(futures::future::err(crate::Error::Custom(
                 hyper::Response::builder()
                     .status(hyper::StatusCode::BAD_REQUEST)
@@ -121,11 +122,13 @@ fn ensure_me(is_me: bool) -> Result<(), crate::Error> {
 
 fn user_path(
     db_pool: &DbPool,
+    server_state: &ServerState,
     req: hyper::Request<hyper::Body>,
     id_or_me: UserIDOrMe,
     path: &str,
 ) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     let db_pool = db_pool.clone();
+    let tiers = server_state.tiers.clone();
     let path = path.to_owned();
     Box::new(rd_login(&db_pool, &req)
              .and_then(|login_user| {
@@ -239,6 +242,55 @@ fn user_path(
                                           }))
                              },
                              _ => Box::new(futures::future::err(crate::Error::InvalidMethod))
+                         }
+                     }
+                 } else if let Some(path) = crate::consume_path(&path, "subscription_tier/") {
+                     if path.is_empty() {
+                         return match *req.method() {
+                             hyper::Method::GET => {
+                                 Box::new(db_pool.run(move |mut conn| {
+                                     conn.prepare("SELECT tier FROM users WHERE id=$1")
+                                         .then(|res| tack_on(res, conn))
+                                         .and_then(move |(stmt, mut conn)| {
+                                             conn.query(&stmt, &[&id.0])
+                                                 .into_future()
+                                                 .map(|(res, _)| res)
+                                                 .map_err(|(err, _)| err)
+                                                 .map(|row| -> Option<i32> {
+                                                     row.map(|row| {
+                                                         row.get(0)
+                                                     })
+                                                 })
+                                             .then(|res| tack_on(res, conn))
+                                         })
+                                 })
+                                          .map_err(ErrorWrapper::from)
+                                          .map_err(|err| crate::Error::Internal(Box::new(err)))
+                                          .and_then(|tier| {
+                                                     tier.ok_or_else(|| crate::Error::Custom(
+                                                             hyper::Response::builder()
+                                                             .status(hyper::StatusCode::NOT_FOUND)
+                                                             .body("No such user".into())))
+                                          })
+                                          .and_then(move |user_tier| {
+                                              for tier in tiers.read().unwrap().iter() {
+                                                  if tier.id == user_tier {
+                                                      return serde_json::to_vec(tier)
+                                                          .map_err(|err| crate::Error::Internal(Box::new(err)))
+                                                  }
+                                              }
+
+                                              return Err(crate::Error::Internal(Box::new(crate::ErrorWrapper::Text("No such tier found".to_owned()))));
+                                          })
+                                          .and_then(|body| {
+                                              hyper::Response::builder()
+                                                  .header(hyper::header::CONTENT_TYPE, "application/json")
+                                                  .body(body.into())
+                                                  .map_err(|err| crate::Error::Internal(Box::new(err)))
+                                          })
+                                          )
+                             },
+                             _ => Box::new(futures::future::err(crate::Error::InvalidMethod)),
                          }
                      }
                  }

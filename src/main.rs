@@ -15,6 +15,7 @@ pub enum Error {
 #[derive(Debug)]
 enum ErrorWrapper {
     Pool(bb8::RunError<tokio_postgres::Error>),
+    Text(String),
 }
 
 impl From<bb8::RunError<tokio_postgres::Error>> for ErrorWrapper {
@@ -30,6 +31,7 @@ impl std::fmt::Display for ErrorWrapper {
                 bb8::RunError::User(err) => write!(f, "Database error: {}", err),
                 bb8::RunError::TimedOut => write!(f, "Database connection timed out"),
             },
+            ErrorWrapper::Text(msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -46,14 +48,23 @@ pub struct TierInfo {
     visit_limit: i32,
 }
 
-#[derive(Clone, Default)]
+#[derive(Serialize)]
+pub struct Settings {
+    pub free_visits: i32,
+}
+
+#[derive(Clone)]
 pub struct ServerState {
+    pub settings: Arc<Settings>,
     pub tiers: Arc<RwLock<Vec<TierInfo>>>,
 }
 
 impl ServerState {
-    pub fn new() -> ServerState {
-        Default::default()
+    pub fn new(settings: Settings) -> ServerState {
+        Self {
+            settings: Arc::new(settings),
+            tiers: Arc::new(RwLock::new(Vec::new())),
+        }
     }
 }
 
@@ -177,9 +188,11 @@ fn handle_request(
     let result = if let Some(path) = consume_path(path, "logins/") {
         routes::logins(cpupool, db_pool, req, path)
     } else if let Some(path) = consume_path(path, "users/") {
-        routes::users(cpupool, db_pool, req, path)
+        routes::users(cpupool, db_pool, server_state, req, path)
     } else if let Some(path) = consume_path(path, "subscription_tiers/") {
         routes::subscription_tiers(server_state, req, path)
+    } else if let Some(path) = consume_path(path, "settings/") {
+        routes::settings(server_state, req, path)
     } else {
         Box::new(futures::future::err(Error::NotFound))
     };
@@ -234,21 +247,46 @@ fn main() {
 
     tokio::run(futures::lazy(move || {
         let cpupool = Arc::new(futures_cpupool::CpuPool::new_num_cpus());
-        let server_state = ServerState::new();
-
         bb8::Pool::builder()
             .build(bb8_postgres::PostgresConnectionManager::new(
                 database_url,
                 tokio_postgres::NoTls,
             ))
             .map_err(|err| panic!("Failed to connect to database: {:?}", err))
-            .and_then(move |db_pool| {
-                tokio::spawn(retrieve_plans(&db_pool, server_state.clone()));
+            .and_then(|db_pool| {
+                db_pool.run(move |mut conn| {
+                    conn.prepare("SELECT free_visits FROM settings LIMIT 1")
+                        .then(|res| tack_on(res, conn))
+                        .and_then(move |(stmt, mut conn)| {
+                            conn.query(&stmt, &[])
+                                .into_future()
+                                .map(|(res, _)| res)
+                                .map_err(|(err, _)| err)
+                                .map(|row| {
+                                    row.map(|row| {
+                                        Settings {
+                                            free_visits: row.get(0),
+                                        }
+                                    })
+                                })
+                            .then(|res| tack_on(res, conn))
+                        })
+                })
+                .map_err(|err| panic!("Failed to retrieve settings: {:?}", err))
+                    .map(|settings| {
+                        match settings {
+                            Some(settings) => (db_pool, ServerState::new(settings)),
+                            None => panic!("Failed to retrieve settings: no row returned"),
+                        }
+                    })
+            })
+        .and_then(move |(db_pool, server_state)| {
+            tokio::spawn(retrieve_plans(&db_pool, server_state.clone()));
 
-                hyper::Server::bind(&std::net::SocketAddr::from((
-                    std::net::Ipv6Addr::UNSPECIFIED,
-                    port,
-                )))
+            hyper::Server::bind(&std::net::SocketAddr::from((
+                        std::net::Ipv6Addr::UNSPECIFIED,
+                        port,
+                        )))
                 .serve(move || {
                     let db_pool = db_pool.clone();
                     let cpupool = cpupool.clone();
@@ -257,8 +295,8 @@ fn main() {
                         handle_request(req, &cpupool, &db_pool, &server_state)
                     })
                 })
-                .map_err(|err| panic!("Server execution failed: {:?}", err))
-            })
+            .map_err(|err| panic!("Server execution failed: {:?}", err))
+        })
     }))
 }
 
