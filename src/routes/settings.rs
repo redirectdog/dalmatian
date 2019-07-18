@@ -1,6 +1,13 @@
 use futures::{Future, IntoFuture};
+use serde_derive::Serialize;
 
 use crate::ServerState;
+
+#[derive(Serialize)]
+struct Output<'a> {
+    free_visits: i32,
+    stripe_publishable_key: &'a Option<String>,
+}
 
 pub fn settings(
     server_state: &ServerState,
@@ -10,17 +17,23 @@ pub fn settings(
     if path.is_empty() {
         match *req.method() {
             hyper::Method::GET => {
-                Box::new(serde_json::to_vec(&*server_state.settings)
-                         .map_err(|err| crate::Error::Internal(Box::new(err)))
-                         .and_then(|body| {
-                             hyper::Response::builder()
-                                 .header(hyper::header::CONTENT_TYPE, "application/json")
-                                 .body(body.into())
-                                 .map_err(|err| crate::Error::Internal(Box::new(err)))
-                         })
-                         .into_future(),
+                let settings = &*server_state.settings;
+                let output = Output {
+                    free_visits: settings.free_visits,
+                    stripe_publishable_key: &settings.stripe_publishable_key,
+                };
+                Box::new(
+                    serde_json::to_vec(&output)
+                        .map_err(|err| crate::Error::Internal(Box::new(err)))
+                        .and_then(|body| {
+                            hyper::Response::builder()
+                                .header(hyper::header::CONTENT_TYPE, "application/json")
+                                .body(body.into())
+                                .map_err(|err| crate::Error::Internal(Box::new(err)))
+                        })
+                        .into_future(),
                 )
-            },
+            }
             _ => Box::new(futures::future::err(crate::Error::InvalidMethod)),
         }
     } else {

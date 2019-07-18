@@ -12,6 +12,12 @@ pub enum Error {
     Internal(Box<dyn std::error::Error + Send>),
 }
 
+impl Error {
+    pub fn internal<E: std::error::Error + Send + 'static>(err: E) -> Self {
+        Error::Internal(Box::new(err))
+    }
+}
+
 #[derive(Debug)]
 enum ErrorWrapper {
     Pool(bb8::RunError<tokio_postgres::Error>),
@@ -48,13 +54,16 @@ pub struct TierInfo {
     visit_limit: i32,
 }
 
-#[derive(Serialize)]
 pub struct Settings {
     pub free_visits: i32,
+    pub frontend_host: Option<String>,
+    pub stripe_secret_key: Option<String>,
+    pub stripe_publishable_key: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct ServerState {
+    pub http_client: Arc<hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>>,
     pub settings: Arc<Settings>,
     pub tiers: Arc<RwLock<Vec<TierInfo>>>,
 }
@@ -62,6 +71,9 @@ pub struct ServerState {
 impl ServerState {
     pub fn new(settings: Settings) -> ServerState {
         Self {
+            http_client: Arc::new(hyper::Client::builder().build(
+                hyper_tls::HttpsConnector::new(4).expect("TLS client initialization failed"),
+            )),
             settings: Arc::new(settings),
             tiers: Arc::new(RwLock::new(Vec::new())),
         }
@@ -75,7 +87,7 @@ fn tack_on<T, E, A>(src: Result<T, E>, add: A) -> Result<(T, A), (E, A)> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct UserID(i32);
 
 impl std::str::FromStr for UserID {
@@ -254,39 +266,43 @@ fn main() {
             ))
             .map_err(|err| panic!("Failed to connect to database: {:?}", err))
             .and_then(|db_pool| {
-                db_pool.run(move |mut conn| {
-                    conn.prepare("SELECT free_visits FROM settings LIMIT 1")
-                        .then(|res| tack_on(res, conn))
-                        .and_then(move |(stmt, mut conn)| {
-                            conn.query(&stmt, &[])
-                                .into_future()
-                                .map(|(res, _)| res)
-                                .map_err(|(err, _)| err)
-                                .map(|row| {
-                                    row.map(|row| {
-                                        Settings {
-                                            free_visits: row.get(0),
-                                        }
-                                    })
-                                })
+                db_pool
+                    .run(move |mut conn| {
+                        conn.prepare("SELECT free_visits FROM settings LIMIT 1")
                             .then(|res| tack_on(res, conn))
-                        })
-                })
-                .map_err(|err| panic!("Failed to retrieve settings: {:?}", err))
-                    .map(|settings| {
-                        match settings {
-                            Some(settings) => (db_pool, ServerState::new(settings)),
-                            None => panic!("Failed to retrieve settings: no row returned"),
-                        }
+                            .and_then(move |(stmt, mut conn)| {
+                                conn.query(&stmt, &[])
+                                    .into_future()
+                                    .map(|(res, _)| res)
+                                    .map_err(|(err, _)| err)
+                                    .map(|row| {
+                                        row.map(|row| Settings {
+                                            free_visits: row.get(0),
+                                            frontend_host: std::env::var("FRONTEND_HOST").ok(),
+                                            stripe_publishable_key: std::env::var(
+                                                "STRIPE_PUBLISHABLE_KEY",
+                                            )
+                                            .ok(),
+                                            stripe_secret_key: std::env::var("STRIPE_SECRET_KEY")
+                                                .ok(),
+                                        })
+                                    })
+                                    .then(|res| tack_on(res, conn))
+                            })
+                    })
+                    .map_err(|err| panic!("Failed to retrieve settings: {:?}", err))
+                    .map(|settings| match settings {
+                        Some(settings) => (db_pool, ServerState::new(settings)),
+                        None => panic!("Failed to retrieve settings: no row returned"),
                     })
             })
-        .and_then(move |(db_pool, server_state)| {
-            tokio::spawn(retrieve_plans(&db_pool, server_state.clone()));
+            .and_then(move |(db_pool, server_state)| {
+                tokio::spawn(retrieve_plans(&db_pool, server_state.clone()));
 
-            hyper::Server::bind(&std::net::SocketAddr::from((
-                        std::net::Ipv6Addr::UNSPECIFIED,
-                        port,
-                        )))
+                hyper::Server::bind(&std::net::SocketAddr::from((
+                    std::net::Ipv6Addr::UNSPECIFIED,
+                    port,
+                )))
                 .serve(move || {
                     let db_pool = db_pool.clone();
                     let cpupool = cpupool.clone();
@@ -295,8 +311,8 @@ fn main() {
                         handle_request(req, &cpupool, &db_pool, &server_state)
                     })
                 })
-            .map_err(|err| panic!("Server execution failed: {:?}", err))
-        })
+                .map_err(|err| panic!("Server execution failed: {:?}", err))
+            })
     }))
 }
 

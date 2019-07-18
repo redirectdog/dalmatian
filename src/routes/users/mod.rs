@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use crate::{rd_login, tack_on, DbPool, ErrorWrapper, ServerState, UserID};
 
+mod checkout_sessions;
+
 #[derive(Deserialize)]
 struct SignupReqBody {
     email: String,
@@ -108,7 +110,7 @@ pub fn users(
     }
 }
 
-fn ensure_me(is_me: bool) -> Result<(), crate::Error> {
+pub fn ensure_me(is_me: bool) -> Result<(), crate::Error> {
     if is_me {
         Ok(())
     } else {
@@ -128,10 +130,10 @@ fn user_path(
     path: &str,
 ) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     let db_pool = db_pool.clone();
-    let tiers = server_state.tiers.clone();
+    let server_state = server_state.clone();
     let path = path.to_owned();
     Box::new(rd_login(&db_pool, &req)
-             .and_then(|login_user| {
+             .and_then(move |login_user| {
                  match id_or_me {
                      UserIDOrMe::ID(id) => {
                          let is_me = match login_user {
@@ -273,7 +275,7 @@ fn user_path(
                                                              .body("No such user".into())))
                                           })
                                           .and_then(move |user_tier| {
-                                              for tier in tiers.read().unwrap().iter() {
+                                              for tier in server_state.tiers.read().unwrap().iter() {
                                                   if tier.id == user_tier {
                                                       return serde_json::to_vec(tier)
                                                           .map_err(|err| crate::Error::Internal(Box::new(err)))
@@ -293,6 +295,8 @@ fn user_path(
                              _ => Box::new(futures::future::err(crate::Error::InvalidMethod)),
                          }
                      }
+                 } else if let Some(path) = crate::consume_path(&path, "checkout_sessions/") {
+                     return checkout_sessions::checkout_sessions_path(&db_pool, &server_state, req, id, is_me, path);
                  }
                  Box::new(futures::future::err(crate::Error::NotFound))
              })
