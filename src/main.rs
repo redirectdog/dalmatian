@@ -1,5 +1,5 @@
 use futures::{Future, Stream};
-use serde_derive::Serialize;
+use serde_derive::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
 mod routes;
@@ -45,6 +45,9 @@ impl std::fmt::Display for ErrorWrapper {
 impl std::error::Error for ErrorWrapper {}
 
 type DbPool = bb8::Pool<bb8_postgres::PostgresConnectionManager<tokio_postgres::NoTls>>;
+type HttpClient = Arc<hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>>;
+
+const STRIPE_API: &str = "https://api.stripe.com/";
 
 #[derive(Serialize)]
 pub struct TierInfo {
@@ -52,6 +55,8 @@ pub struct TierInfo {
     name: String,
     stripe_plan: Option<String>,
     visit_limit: i32,
+
+    monthly_price: Option<u32>,
 }
 
 pub struct Settings {
@@ -63,7 +68,7 @@ pub struct Settings {
 
 #[derive(Clone)]
 pub struct ServerState {
-    pub http_client: Arc<hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>>,
+    pub http_client: HttpClient,
     pub settings: Arc<Settings>,
     pub tiers: Arc<RwLock<Vec<TierInfo>>>,
 }
@@ -326,18 +331,113 @@ fn retrieve_plans(
                 .then(|res| tack_on(res, conn))
                 .and_then(move |(stmt, mut conn)| {
                     conn.query(&stmt, &[])
-                        .map(|row| TierInfo {
-                            id: row.get(0),
-                            name: row.get(1),
-                            stripe_plan: row.get(2),
-                            visit_limit: row.get(3),
+                        .map(|row| {
+                            let id = row.get(0);
+                            TierInfo {
+                                id,
+                                name: row.get(1),
+                                stripe_plan: row.get(2),
+                                visit_limit: row.get(3),
+                                monthly_price: if id == 0 { Some(0) } else { None },
+                            }
                         })
                         .collect()
                         .then(|res| tack_on(res, conn))
                 })
         })
-        .map(move |tiers| {
+        .map_err(|err| format!("Failed to retrieve plan list: {:?}", err))
+        .and_then(move |tiers| {
+            let fetches: Vec<_> = match server_state.settings.stripe_secret_key.as_ref() {
+                Some(stripe_secret_key) => {
+                    let auth_header = format!(
+                        "Basic {}",
+                        base64::encode(&format!("{}:", stripe_secret_key))
+                    );
+
+                    let server_state = server_state.clone();
+
+                    tiers
+                        .iter()
+                        .filter_map(|row| {
+                            let tier_id = row.id;
+                            let server_state = server_state.clone();
+                            let auth_header = auth_header.clone();
+                            row.stripe_plan.as_ref().and_then(move |plan_id| {
+                                let auth_header: &str = &auth_header;
+                                match hyper::Request::get(format!(
+                                    "{}v1/plans/{}",
+                                    STRIPE_API,
+                                    percent_encoding::utf8_percent_encode(
+                                        plan_id,
+                                        percent_encoding::DEFAULT_ENCODE_SET
+                                    )
+                                ))
+                                .header(hyper::header::AUTHORIZATION, auth_header)
+                                .body(hyper::Body::empty())
+                                {
+                                    Ok(req) => {
+                                        #[derive(Deserialize)]
+                                        struct Plan {
+                                            amount: u32,
+                                        }
+
+                                        Some(
+                                            server_state
+                                                .http_client
+                                                .request(req)
+                                                .and_then(|res| {
+                                                    let status = res.status();
+                                                    res.into_body()
+                                                        .concat2()
+                                                        .map(move |body| (body, status))
+                                                })
+                                                .map_err(|err| {
+                                                    format!(
+                                                        "Failed to request plan info: {:?}",
+                                                        err
+                                                    )
+                                                })
+                                                .and_then(|(body, status)| {
+                                                    if status.is_success() {
+                                                        serde_json::from_slice(&body)
+														 .map_err(|err| format!("Failed to parse response: {:?}", err))
+                                                    } else {
+                                                        Err(format!("Received error: {:?}", body))
+                                                    }
+                                                })
+                                                .and_then(move |plan: Plan| {
+                                                    let tiers =
+                                                        &mut *server_state.tiers.write().unwrap();
+
+                                                    for mut tier in tiers.iter_mut() {
+                                                        if tier.id == tier_id {
+                                                            tier.monthly_price = Some(plan.amount);
+                                                            break;
+                                                        }
+                                                    }
+
+                                                    Ok(())
+                                                }),
+                                        )
+                                    }
+                                    Err(err) => {
+                                        eprintln!("Failed to construct request: {:?}", err);
+                                        None
+                                    }
+                                }
+                            })
+                        })
+                        .collect()
+                }
+                None => {
+                    println!("Missing STRIPE_SECRET_KEY, skipping price fetch");
+                    Vec::new()
+                }
+            };
+
             *server_state.tiers.write().unwrap() = tiers;
+
+            futures::future::join_all(fetches).map(|_: Vec<()>| ())
         })
         .map_err(|err| {
             eprintln!("failed in retrieve_plans: {:?}", err);

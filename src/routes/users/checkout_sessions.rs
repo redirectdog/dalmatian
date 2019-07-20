@@ -1,9 +1,7 @@
 use futures::{Future, IntoFuture, Stream};
 
 use super::ensure_me;
-use crate::{tack_on, DbPool, ErrorWrapper, ServerState, UserID};
-
-const STRIPE_API: &str = "https://api.stripe.com/";
+use crate::{tack_on, DbPool, ErrorWrapper, ServerState, UserID, STRIPE_API};
 
 pub fn checkout_sessions_path(
     db_pool: &DbPool,
