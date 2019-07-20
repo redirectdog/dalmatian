@@ -282,7 +282,7 @@ fn user_path(
                                                   }
                                               }
 
-                                              return Err(crate::Error::Internal(Box::new(crate::ErrorWrapper::Text("No such tier found".to_owned()))));
+                                              Err(crate::Error::Internal(Box::new(crate::ErrorWrapper::Text("No such tier found".to_owned()))))
                                           })
                                           .and_then(|body| {
                                               hyper::Response::builder()

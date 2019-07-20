@@ -109,7 +109,7 @@ impl serde::Serialize for UserID {
 }
 
 impl UserID {
-    pub fn to_raw(&self) -> i32 {
+    pub fn to_raw(self) -> i32 {
         self.0
     }
 }
