@@ -204,6 +204,8 @@ fn handle_request(
 
     let result = if let Some(path) = consume_path(path, "logins/") {
         routes::logins(cpupool, db_pool, req, path)
+    } else if let Some(path) = consume_path(path, "redirects/") {
+        routes::redirects(db_pool, req, path)
     } else if let Some(path) = consume_path(path, "users/") {
         routes::users(cpupool, db_pool, server_state, req, path)
     } else if let Some(path) = consume_path(path, "subscription_tiers/") {

@@ -24,12 +24,12 @@ enum UserIDOrMe {
 }
 
 #[derive(Serialize)]
-struct RedirectInfo {
-    id: i32,
-    host: String,
-    destination: String,
-    visits_total: Option<i32>,
-    visits_month: Option<i32>,
+pub struct RedirectInfo {
+    pub id: i32,
+    pub host: String,
+    pub destination: String,
+    pub visits_total: Option<i32>,
+    pub visits_month: Option<i32>,
 }
 
 impl std::str::FromStr for UserIDOrMe {
