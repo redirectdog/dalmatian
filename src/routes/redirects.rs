@@ -1,5 +1,6 @@
 use futures::{Future, Stream};
-use serde_derive::Serialize;
+use serde_derive::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::routes::users::RedirectInfo;
 use crate::{tack_on, DbPool, ErrorWrapper};
@@ -26,6 +27,13 @@ struct RedirectInfoExpanded {
     base: RedirectInfo,
     tls: RedirectTLSInfo,
     record_confirmed: bool,
+}
+
+#[derive(Deserialize)]
+struct RedirectPatchBody {
+    destination: Option<String>,
+    #[serde(rename = "tls.enabled")]
+    allow_tls: Option<bool>,
 }
 
 pub fn redirects_path(
@@ -124,6 +132,91 @@ fn redirect_path(
                                          .body(body.into())
                                          .map_err(crate::Error::internal)
                                  })
+                         }))
+            },
+            hyper::Method::PATCH => {
+                let db_pool = db_pool.clone();
+                Box::new(crate::rd_login(&db_pool, &req)
+                         .join(db_pool.run(move |mut conn| {
+                             conn.prepare("SELECT owner FROM redirects WHERE id=$1")
+                                 .then(|res| tack_on(res, conn))
+                                 .and_then(move |(stmt, mut conn)| {
+                                     conn.query(&stmt, &[&id])
+                                         .into_future()
+                                         .map(|(res, _)| res)
+                                         .map_err(|(err, _)| err)
+                                         .then(|res| tack_on(res, conn))
+                                 })
+                         })
+                               .map_err(ErrorWrapper::from)
+                               .map_err(crate::Error::internal)
+                               .and_then(|row| {
+                                   row.ok_or_else(|| crate::Error::Custom(hyper::Response::builder()
+                                                                          .status(hyper::StatusCode::NOT_FOUND)
+                                                                          .body("No such redirect".into())))
+                               }))
+                         .and_then(|(login_user, row)| {
+                             let owner: i32 = row.get(0);
+                             if let Some(login_user) = login_user {
+                                 if owner != login_user.to_raw() {
+                                     Err(crate::Error::Custom(hyper::Response::builder()
+                                                              .status(hyper::StatusCode::FORBIDDEN)
+                                                              .body("That's not your redirect".into())))
+                                 } else {
+                                     Ok(())
+                                 }
+                             } else {
+                                 Err(crate::Error::Custom(hyper::Response::builder()
+                                                          .status(hyper::StatusCode::UNAUTHORIZED)
+                                                          .body("Login is required to access redirects".into())))
+                             }
+                         })
+                         .and_then(move |_| {
+                             req.into_body()
+                                 .concat2()
+                                 .map_err(crate::Error::internal)
+                                 .and_then(|body| {
+                                     serde_json::from_slice(&body)
+                                         .map_err(crate::Error::internal)
+                                 })
+                             .and_then(move |body: RedirectPatchBody| {
+                                 let mut changes: HashMap<&str, Box<tokio_postgres::types::ToSql + Send + Sync>> = HashMap::new();
+                                 if let Some(destination) = body.destination {
+                                     changes.insert("destination", Box::new(destination));
+                                 }
+                                 if let Some(allow_tls) = body.allow_tls {
+                                     changes.insert("allow_tls", Box::new(allow_tls));
+                                 }
+
+                                 if changes.is_empty() {
+                                     futures::future::Either::A(futures::future::ok(()))
+                                 } else {
+                                     let mut values: Vec<Box<tokio_postgres::types::ToSql + Send + Sync>> = vec![Box::new(id)];
+
+                                     let sql = format!("UPDATE redirects SET {} WHERE id=$1", changes.into_iter().map(|(key, value)| {
+                                         values.push(value);
+                                         format!("\"{}\" = ${}", key, values.len())
+                                     }).collect::<Vec<_>>().join(", "));
+
+                                 futures::future::Either::B(db_pool.run(move |mut conn| {
+                                     conn.prepare(&sql)
+                                         .then(|res| tack_on(res, conn))
+                                         .and_then(move |(stmt, mut conn)| {
+                                             let values: Vec<_> = values.iter().map(|x| x.as_ref() as &dyn tokio_postgres::types::ToSql).collect();
+                                             conn.execute(&stmt, &values[..])
+                                                 .then(|res| tack_on(res, conn))
+                                         })
+                                 })
+                                                            .map(|_| ())
+                                                            .map_err(ErrorWrapper::from)
+                                                            .map_err(crate::Error::internal))
+                                 }
+                             })
+                         })
+                         .and_then(|_| {
+                             hyper::Response::builder()
+                                 .body(hyper::Body::empty())
+                                 .map_err(crate::Error::internal)
                          }))
             },
             _ => Box::new(futures::future::err(crate::Error::InvalidMethod)),
