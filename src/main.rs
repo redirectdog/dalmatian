@@ -62,6 +62,7 @@ pub struct TierInfo {
 pub struct Settings {
     pub free_visits: i32,
     pub frontend_host: Option<String>,
+    pub redirect_host: Option<String>,
     pub stripe_secret_key: Option<String>,
     pub stripe_publishable_key: Option<String>,
 }
@@ -286,6 +287,7 @@ fn main() {
                                         row.map(|row| Settings {
                                             free_visits: row.get(0),
                                             frontend_host: std::env::var("FRONTEND_HOST").ok(),
+                                            redirect_host: std::env::var("REDIRECT_HOST").ok(),
                                             stripe_publishable_key: std::env::var(
                                                 "STRIPE_PUBLISHABLE_KEY",
                                             )
