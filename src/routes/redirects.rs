@@ -32,8 +32,6 @@ struct RedirectInfoExpanded {
 #[derive(Deserialize)]
 struct RedirectPatchBody {
     destination: Option<String>,
-    #[serde(rename = "tls.enabled")]
-    allow_tls: Option<bool>,
 }
 
 pub fn redirects_path(
@@ -68,7 +66,7 @@ fn redirect_path(
             hyper::Method::GET => {
                 Box::new(crate::rd_login(&db_pool, &req)
                          .join(db_pool.run(move |mut conn| {
-                             conn.prepare("SELECT host, destination, owner, cache_visit_count_total, cache_visit_count_month, allow_tls, acme_failed, (tls_cert IS NOT NULL AND tls_privkey IS NOT NULL), record_confirmed FROM redirects WHERE id=$1")
+                             conn.prepare("SELECT host, destination, owner, cache_visit_count_total, cache_visit_count_month, acme_failed, (tls_cert IS NOT NULL AND tls_privkey IS NOT NULL), record_confirmed FROM redirects WHERE id=$1")
                                  .then(|res| tack_on(res, conn))
                                  .and_then(move |(stmt, mut conn)| {
                                      conn.query(&stmt, &[&id])
@@ -184,10 +182,6 @@ fn redirect_path(
                                  if let Some(destination) = body.destination {
                                      changes.insert("destination", Box::new(destination));
                                  }
-                                 if let Some(allow_tls) = body.allow_tls {
-                                     changes.insert("allow_tls", Box::new(allow_tls));
-                                 }
-
                                  if changes.is_empty() {
                                      futures::future::Either::A(futures::future::ok(()))
                                  } else {
