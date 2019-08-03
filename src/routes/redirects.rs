@@ -17,7 +17,6 @@ enum RedirectTLSState {
 
 #[derive(Serialize)]
 struct RedirectTLSInfo {
-    enabled: bool,
     state: RedirectTLSState,
 }
 
@@ -110,16 +109,15 @@ fn redirect_path(
                                      visits_month: row.get(4),
                                  },
                                  tls: RedirectTLSInfo {
-                                     enabled: row.get(5),
-                                     state: if row.get(7) {
+                                     state: if row.get(6) {
                                          RedirectTLSState::Ready
-                                     } else if row.get(6) {
+                                     } else if row.get(5) {
                                          RedirectTLSState::Error
                                      } else {
                                          RedirectTLSState::Pending
                                      },
                                  },
-                                 record_confirmed: row.get(8),
+                                 record_confirmed: row.get(7),
                              };
 
                              serde_json::to_vec(&info)
