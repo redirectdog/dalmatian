@@ -373,7 +373,7 @@ fn retrieve_plans(
                                     STRIPE_API,
                                     percent_encoding::utf8_percent_encode(
                                         plan_id,
-                                        percent_encoding::DEFAULT_ENCODE_SET
+                                        percent_encoding::NON_ALPHANUMERIC,
                                     )
                                 ))
                                 .header(hyper::header::AUTHORIZATION, auth_header)
