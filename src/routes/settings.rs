@@ -14,7 +14,7 @@ pub fn settings(
     server_state: &ServerState,
     req: hyper::Request<hyper::Body>,
     path: &str,
-) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
+) -> Box<dyn Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     if path.is_empty() {
         match *req.method() {
             hyper::Method::GET => {

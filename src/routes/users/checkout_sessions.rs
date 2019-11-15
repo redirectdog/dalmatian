@@ -10,7 +10,7 @@ pub fn checkout_sessions_path(
     user_id: UserID,
     is_me: bool,
     path: &str,
-) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
+) -> Box<dyn Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     if path.is_empty() {
         match *req.method() {
             hyper::Method::POST => {

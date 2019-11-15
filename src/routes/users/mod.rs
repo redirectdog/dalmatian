@@ -49,7 +49,7 @@ pub fn users(
     server_state: &ServerState,
     req: hyper::Request<hyper::Body>,
     path: &str,
-) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
+) -> Box<dyn Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     if path.is_empty() {
         match *req.method() {
             hyper::Method::POST => {
@@ -128,7 +128,7 @@ fn user_path(
     req: hyper::Request<hyper::Body>,
     id_or_me: UserIDOrMe,
     path: &str,
-) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
+) -> Box<dyn Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     let db_pool = db_pool.clone();
     let server_state = server_state.clone();
     let path = path.to_owned();
@@ -150,7 +150,7 @@ fn user_path(
                      }
                  }
              })
-             .and_then(move |(id, is_me)| -> Box<Future<Item=hyper::Response<hyper::Body>, Error=crate::Error> + Send> {
+             .and_then(move |(id, is_me)| -> Box<dyn Future<Item=hyper::Response<hyper::Body>, Error=crate::Error> + Send> {
                  if path.is_empty() {
                      return match *req.method() {
                          hyper::Method::GET => {

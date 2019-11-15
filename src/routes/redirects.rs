@@ -37,7 +37,7 @@ pub fn redirects_path(
     db_pool: &DbPool,
     req: hyper::Request<hyper::Body>,
     path: &str,
-) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
+) -> Box<dyn Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     if path.is_empty() {
         Box::new(futures::future::err(crate::Error::InvalidMethod))
     } else if let Some((segment, path)) = crate::consume_path_segment(path) {
@@ -59,7 +59,7 @@ fn redirect_path(
     req: hyper::Request<hyper::Body>,
     id: i32,
     path: &str,
-) -> Box<Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
+) -> Box<dyn Future<Item = hyper::Response<hyper::Body>, Error = crate::Error> + Send> {
     if path.is_empty() {
         match *req.method() {
             hyper::Method::GET => {
@@ -176,14 +176,14 @@ fn redirect_path(
                                          .map_err(crate::Error::internal)
                                  })
                              .and_then(move |body: RedirectPatchBody| {
-                                 let mut changes: HashMap<&str, Box<tokio_postgres::types::ToSql + Send + Sync>> = HashMap::new();
+                                 let mut changes: HashMap<&str, Box<dyn tokio_postgres::types::ToSql + Send + Sync>> = HashMap::new();
                                  if let Some(destination) = body.destination {
                                      changes.insert("destination", Box::new(destination));
                                  }
                                  if changes.is_empty() {
                                      futures::future::Either::A(futures::future::ok(()))
                                  } else {
-                                     let mut values: Vec<Box<tokio_postgres::types::ToSql + Send + Sync>> = vec![Box::new(id)];
+                                     let mut values: Vec<Box<dyn tokio_postgres::types::ToSql + Send + Sync>> = vec![Box::new(id)];
 
                                      let sql = format!("UPDATE redirects SET {} WHERE id=$1", changes.into_iter().map(|(key, value)| {
                                          values.push(value);
