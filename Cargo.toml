@@ -7,19 +7,19 @@ edition = "2018"
 [dependencies]
 bb8-postgres = "0.3.0"
 bb8 = "0.3.0"
-tokio-postgres = { version = "0.4.0-rc.2", features = ["with-uuid-0_7"] }
+tokio-postgres = { version = "0.4.0-rc.3", features = ["with-uuid-0_7"] }
 futures = "0.1.26"
 tokio = "0.1.18"
-bcrypt = "0.4.0"
+bcrypt = "0.6.1"
 futures-cpupool = "0.1.8"
 serde = "1.0.90"
 serde_derive = "1.0.90"
 http = "0.1.17"
-uuid = { version = "0.7.4", features = ["v4"] }
+uuid = { version = "0.7", features = ["v4"] }
 headers = "0.2.1"
 hyper = "0.12.27"
 serde_json = "1.0.39"
 hyper-tls = "0.3.2"
-base64 = "0.10.1"
+base64 = "0.11.0"
 serde_qs = "0.5.0"
 percent-encoding = "1.0.1"
